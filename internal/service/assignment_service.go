@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/spec-kit/ticket-service/internal/domain"
+	"github.com/spec-kit/ticket-service/internal/events"
 	"github.com/spec-kit/ticket-service/internal/repository"
 )
 
@@ -15,6 +19,7 @@ type AssignmentService struct {
 	staff       repository.StaffRepository
 	teams       repository.TeamRepository
 	historyRepo repository.TicketHistoryRepository
+	dispatcher  events.Dispatcher
 }
 
 // AssignmentDependencies bundles repositories.
@@ -23,6 +28,7 @@ type AssignmentDependencies struct {
 	StaffRepo   repository.StaffRepository
 	TeamRepo    repository.TeamRepository
 	HistoryRepo repository.TicketHistoryRepository
+	Dispatcher  events.Dispatcher
 }
 
 // NewAssignmentService creates the service.
@@ -32,6 +38,7 @@ func NewAssignmentService(deps AssignmentDependencies) *AssignmentService {
 		staff:       deps.StaffRepo,
 		teams:       deps.TeamRepo,
 		historyRepo: deps.HistoryRepo,
+		dispatcher:  deps.Dispatcher,
 	}
 }
 
@@ -59,6 +66,10 @@ func (s *AssignmentService) SelfAssignTicket(ctx context.Context, staff *domain.
 	if err := s.recordAssigneeChange(ctx, staff.ID, ticket.ID, oldAssignee, ticket.AssigneeID); err != nil {
 		return nil, err
 	}
+	s.publishAssignmentEvent(ctx, staff.ID, events.TicketAssignedPayload{
+		AssigneeStaffID: ticket.AssigneeID,
+		TeamID:          ticket.TeamID,
+	}, ticket.ID)
 	return ticket, nil
 }
 
@@ -93,6 +104,10 @@ func (s *AssignmentService) AssignTicketToStaff(ctx context.Context, actor *doma
 	if err := s.recordAssigneeChange(ctx, actor.ID, ticket.ID, oldAssignee, ticket.AssigneeID); err != nil {
 		return nil, err
 	}
+	s.publishAssignmentEvent(ctx, actor.ID, events.TicketAssignedPayload{
+		AssigneeStaffID: ticket.AssigneeID,
+		TeamID:          ticket.TeamID,
+	}, ticket.ID)
 	return ticket, nil
 }
 
@@ -131,6 +146,10 @@ func (s *AssignmentService) AssignTicketToTeam(ctx context.Context, actor *domai
 			return nil, err
 		}
 	}
+	s.publishAssignmentEvent(ctx, actor.ID, events.TicketAssignedPayload{
+		AssigneeStaffID: nil,
+		TeamID:          ticket.TeamID,
+	}, ticket.ID)
 	return ticket, nil
 }
 
@@ -185,6 +204,10 @@ func (s *AssignmentService) AutoAssignTicket(ctx context.Context, ticketID, team
 	if err := s.recordAssigneeChange(ctx, assignee.ID, ticket.ID, oldAssignee, ticket.AssigneeID); err != nil {
 		return nil, err
 	}
+	s.publishAssignmentEvent(ctx, assignee.ID, events.TicketAssignedPayload{
+		AssigneeStaffID: ticket.AssigneeID,
+		TeamID:          ticket.TeamID,
+	}, ticket.ID)
 	return ticket, nil
 }
 
@@ -285,4 +308,19 @@ func (s *AssignmentService) recordDepartmentChange(ctx context.Context, actorID 
 			"department_id": newDept,
 		},
 	})
+}
+
+func (s *AssignmentService) publishAssignmentEvent(ctx context.Context, actorID string, payload events.TicketAssignedPayload, ticketID string) {
+	if s.dispatcher == nil {
+		return
+	}
+	event := events.Event{
+		ID:        uuid.NewString(),
+		Type:      events.EventTicketAssigned,
+		TicketID:  ticketID,
+		Actor:     events.Actor{Type: domain.SubjectTypeStaff, StaffID: &actorID},
+		Timestamp: time.Now(),
+		Payload:   payload,
+	}
+	_ = s.dispatcher.Publish(ctx, event)
 }

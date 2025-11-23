@@ -14,10 +14,12 @@ import (
 	"github.com/spec-kit/ticket-service/internal/api/http/handlers"
 	"github.com/spec-kit/ticket-service/internal/auth"
 	"github.com/spec-kit/ticket-service/internal/config"
+	"github.com/spec-kit/ticket-service/internal/events"
 	"github.com/spec-kit/ticket-service/internal/observability"
 	"github.com/spec-kit/ticket-service/internal/persistence"
 	"github.com/spec-kit/ticket-service/internal/repository"
 	"github.com/spec-kit/ticket-service/internal/service"
+	"github.com/spec-kit/ticket-service/internal/worker"
 )
 
 func main() {
@@ -31,6 +33,10 @@ func main() {
 		log.Fatalf("failed to init logger: %v", err)
 	}
 	defer logger.Sync() //nolint:errcheck
+
+	dispatcher := events.NewInMemoryDispatcher()
+	notificationSvc := service.NewNotificationService(dispatcher, logger, cfg.Notification)
+	worker.StartNotificationWorker(notificationSvc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -82,6 +88,7 @@ func main() {
 		TeamRepo:       teamRepo,
 		StaffRepo:      staffRepo,
 		HistoryRepo:    ticketHistoryRepo,
+		Dispatcher:     dispatcher,
 	})
 
 	assignmentService := service.NewAssignmentService(service.AssignmentDependencies{
@@ -89,6 +96,7 @@ func main() {
 		StaffRepo:   staffRepo,
 		TeamRepo:    teamRepo,
 		HistoryRepo: ticketHistoryRepo,
+		Dispatcher:  dispatcher,
 	})
 
 	app := fiber.New()

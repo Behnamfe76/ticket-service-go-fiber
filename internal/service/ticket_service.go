@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/spec-kit/ticket-service/internal/domain"
+	"github.com/spec-kit/ticket-service/internal/events"
 	"github.com/spec-kit/ticket-service/internal/repository"
 )
 
@@ -22,6 +23,7 @@ type TicketService struct {
 	teams       repository.TeamRepository
 	staff       repository.StaffRepository
 	history     repository.TicketHistoryRepository
+	dispatcher  events.Dispatcher
 }
 
 // TicketDependencies bundles repositories for ticket service.
@@ -33,6 +35,7 @@ type TicketDependencies struct {
 	TeamRepo       repository.TeamRepository
 	StaffRepo      repository.StaffRepository
 	HistoryRepo    repository.TicketHistoryRepository
+	Dispatcher     events.Dispatcher
 }
 
 // TicketCreateInput describes ticket creation payload.
@@ -89,6 +92,7 @@ func NewTicketService(deps TicketDependencies) *TicketService {
 		teams:       deps.TeamRepo,
 		staff:       deps.StaffRepo,
 		history:     deps.HistoryRepo,
+		dispatcher:  deps.Dispatcher,
 	}
 }
 
@@ -133,6 +137,17 @@ func (s *TicketService) CreateTicket(ctx context.Context, userID string, input T
 	if err := s.tickets.Create(ctx, ticket); err != nil {
 		return nil, err
 	}
+	s.publishEvent(ctx, events.Event{
+		Type:     events.EventTicketCreated,
+		TicketID: ticket.ID,
+		Actor:    userActor(userID),
+		Payload: events.TicketCreatedPayload{
+			DepartmentID: ticket.DepartmentID,
+			TeamID:       ticket.TeamID,
+			Priority:     ticket.Priority,
+			Title:        ticket.Title,
+		},
+	})
 	return ticket, nil
 }
 
@@ -262,6 +277,18 @@ func (s *TicketService) AddMessage(ctx context.Context, actor domain.SubjectType
 		}
 		msg.Attachments = append(msg.Attachments, *record)
 	}
+	s.publishEvent(ctx, events.Event{
+		Type:     events.EventTicketMessageAdded,
+		TicketID: ticket.ID,
+		Actor:    actorFromSubject(actor, actorID),
+		Payload: events.TicketMessageAddedPayload{
+			MessageID:   msg.ID,
+			MessageType: msg.MessageType,
+			AuthorType:  msg.AuthorType,
+			AuthorID:    msg.AuthorID,
+			BodyPreview: stringPreview(msg.Body, 120),
+		},
+	})
 	return msg, nil
 }
 
@@ -287,6 +314,16 @@ func (s *TicketService) CloseTicketAsUser(ctx context.Context, userID, ticketID 
 	if err := s.recordStatusChange(ctx, domain.AuthorTypeUser, &userID, ticket.ID, oldStatus, ticket.Status, "user_closed"); err != nil {
 		return nil, err
 	}
+	s.publishEvent(ctx, events.Event{
+		Type:     events.EventTicketStatusChanged,
+		TicketID: ticket.ID,
+		Actor:    userActor(userID),
+		Payload: events.TicketStatusChangedPayload{
+			OldStatus: oldStatus,
+			NewStatus: ticket.Status,
+			Comment:   "user_closed",
+		},
+	})
 	return ticket, nil
 }
 
@@ -319,6 +356,16 @@ func (s *TicketService) UpdateStatus(ctx context.Context, staff *domain.StaffMem
 	if err := s.recordStatusChange(ctx, domain.AuthorTypeStaff, &staff.ID, ticket.ID, oldStatus, newStatus, comment); err != nil {
 		return nil, err
 	}
+	s.publishEvent(ctx, events.Event{
+		Type:     events.EventTicketStatusChanged,
+		TicketID: ticket.ID,
+		Actor:    staffActor(staff.ID),
+		Payload: events.TicketStatusChangedPayload{
+			OldStatus: oldStatus,
+			NewStatus: newStatus,
+			Comment:   comment,
+		},
+	})
 	return ticket, nil
 }
 
@@ -342,6 +389,15 @@ func (s *TicketService) UpdatePriority(ctx context.Context, staff *domain.StaffM
 	if err := s.recordPriorityChange(ctx, domain.AuthorTypeStaff, &staff.ID, ticket.ID, oldPriority, newPriority); err != nil {
 		return nil, err
 	}
+	s.publishEvent(ctx, events.Event{
+		Type:     events.EventTicketPriorityChanged,
+		TicketID: ticket.ID,
+		Actor:    staffActor(staff.ID),
+		Payload: events.TicketPriorityChangedPayload{
+			OldPriority: oldPriority,
+			NewPriority: newPriority,
+		},
+	})
 	return ticket, nil
 }
 
@@ -449,6 +505,53 @@ func (s *TicketService) messagesWithAttachments(ctx context.Context, ticketID st
 
 func generateTicketKey() string {
 	return "TCK-" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
+}
+
+func (s *TicketService) publishEvent(ctx context.Context, event events.Event) {
+	if s.dispatcher == nil {
+		return
+	}
+	if event.ID == "" {
+		event.ID = uuid.NewString()
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now()
+	}
+	_ = s.dispatcher.Publish(ctx, event)
+}
+
+func userActor(userID string) events.Actor {
+	return events.Actor{
+		Type:   domain.SubjectTypeUser,
+		UserID: &userID,
+	}
+}
+
+func staffActor(staffID string) events.Actor {
+	return events.Actor{
+		Type:    domain.SubjectTypeStaff,
+		StaffID: &staffID,
+	}
+}
+
+func actorFromSubject(subject domain.SubjectType, id string) events.Actor {
+	switch subject {
+	case domain.SubjectTypeStaff:
+		return staffActor(id)
+	default:
+		return userActor(id)
+	}
+}
+
+func stringPreview(body string, max int) string {
+	body = strings.TrimSpace(body)
+	if len(body) <= max {
+		return body
+	}
+	if max <= 3 {
+		return body[:max]
+	}
+	return body[:max-3] + "..."
 }
 
 var allowedTransitions = map[domain.TicketStatus][]domain.TicketStatus{

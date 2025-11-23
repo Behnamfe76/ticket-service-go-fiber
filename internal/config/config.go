@@ -10,11 +10,12 @@ import (
 
 // Config aggregates runtime configuration for the service.
 type Config struct {
-	App      AppConfig
-	Postgres PostgresConfig
-	Redis    RedisConfig
-	Logger   LoggerConfig
-	Auth     AuthConfig
+	App          AppConfig
+	Postgres     PostgresConfig
+	Redis        RedisConfig
+	Logger       LoggerConfig
+	Auth         AuthConfig
+	Notification NotificationConfig
 }
 
 // AppConfig controls server level behavior.
@@ -53,6 +54,12 @@ type AuthConfig struct {
 	AccessTokenTTLMinutes   int
 	PasswordResetTTLMinutes int
 	BcryptCost              int
+}
+
+// NotificationConfig holds stub notification endpoints.
+type NotificationConfig struct {
+	EmailFrom  string
+	WebhookURL string
 }
 
 // Load reads configuration from environment variables, applying defaults where possible.
@@ -98,6 +105,10 @@ func Load() (*Config, error) {
 			AccessTokenTTLMinutes:   getEnvAsInt("AUTH_ACCESS_TOKEN_TTL_MINUTES", 60),
 			PasswordResetTTLMinutes: getEnvAsInt("AUTH_PASSWORD_RESET_TTL_MINUTES", 30),
 			BcryptCost:              getEnvAsInt("AUTH_BCRYPT_COST", 12),
+		},
+		Notification: NotificationConfig{
+			EmailFrom:  getEnv("NOTIFY_EMAIL_FROM", "noreply@example.com"),
+			WebhookURL: getEnv("NOTIFY_WEBHOOK_URL", ""),
 		},
 	}
 
