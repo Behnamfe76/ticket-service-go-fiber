@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -21,7 +22,25 @@ func NewPostgres(ctx context.Context, cfg config.PostgresConfig, logger *zap.Log
 		return &Postgres{Pool: nil}, nil
 	}
 
-	pool, err := pgxpool.New(ctx, cfg.DSN)
+	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.MaxConns > 0 {
+		poolCfg.MaxConns = cfg.MaxConns
+	}
+	if cfg.MinConns > 0 {
+		poolCfg.MinConns = cfg.MinConns
+	}
+	if cfg.ConnMaxIdleSec > 0 {
+		poolCfg.MaxConnIdleTime = time.Duration(cfg.ConnMaxIdleSec) * time.Second
+	}
+	if cfg.ConnMaxLifeSec > 0 {
+		poolCfg.MaxConnLifetime = time.Duration(cfg.ConnMaxLifeSec) * time.Second
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -40,4 +59,12 @@ func (p *Postgres) Close() {
 	if p != nil && p.Pool != nil {
 		p.Pool.Close()
 	}
+}
+
+// PoolHandle returns the underlying pgx pool.
+func (p *Postgres) PoolHandle() *pgxpool.Pool {
+	if p == nil {
+		return nil
+	}
+	return p.Pool
 }

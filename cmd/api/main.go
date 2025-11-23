@@ -38,6 +38,12 @@ func main() {
 	}
 	defer pg.Close()
 
+	if cfg.Postgres.RunMigrations {
+		if err := persistence.RunMigrations(ctx, pg.PoolHandle(), logger); err != nil {
+			logger.Fatal("failed to run migrations", zap.Error(err))
+		}
+	}
+
 	redis := persistence.NewRedis(cfg.Redis, logger)
 	defer redis.Close()
 

@@ -26,7 +26,12 @@ type AppConfig struct {
 
 // PostgresConfig holds DB connection values.
 type PostgresConfig struct {
-	DSN string
+	DSN            string
+	MaxConns       int32
+	MinConns       int32
+	RunMigrations  bool
+	ConnMaxIdleSec int32
+	ConnMaxLifeSec int32
 }
 
 // RedisConfig holds Redis connection values.
@@ -50,6 +55,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid REDIS_DB: %w", err)
 	}
 
+	maxConns := int32(getEnvAsInt("POSTGRES_MAX_CONNS", 10))
+	minConns := int32(getEnvAsInt("POSTGRES_MIN_CONNS", 2))
+	runMigrations := getEnvAsBool("POSTGRES_RUN_MIGRATIONS", true)
+	connMaxIdle := int32(getEnvAsInt("POSTGRES_CONN_MAX_IDLE_SECONDS", 30))
+	connMaxLife := int32(getEnvAsInt("POSTGRES_CONN_MAX_LIFE_SECONDS", 300))
+
 	cfg := &Config{
 		App: AppConfig{
 			Name: getEnv("APP_NAME", "support-ticket-service"),
@@ -58,7 +69,12 @@ func Load() (*Config, error) {
 			Port: getEnv("APP_PORT", "8080"),
 		},
 		Postgres: PostgresConfig{
-			DSN: os.Getenv("POSTGRES_DSN"),
+			DSN:            os.Getenv("POSTGRES_DSN"),
+			MaxConns:       maxConns,
+			MinConns:       minConns,
+			RunMigrations:  runMigrations,
+			ConnMaxIdleSec: connMaxIdle,
+			ConnMaxLifeSec: connMaxLife,
 		},
 		Redis: RedisConfig{
 			Addr:     getEnv("REDIS_ADDR", "127.0.0.1:6379"),
@@ -83,4 +99,28 @@ func getEnv(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+func getEnvAsInt(key string, fallback int) int {
+	val := os.Getenv(key)
+	if val == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvAsBool(key string, fallback bool) bool {
+	val := os.Getenv(key)
+	if val == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(val)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
