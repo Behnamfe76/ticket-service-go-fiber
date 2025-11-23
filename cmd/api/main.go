@@ -54,6 +54,11 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	staffRepo := repository.NewStaffRepository(pool)
 	resetRepo := repository.NewPasswordResetRepository(pool)
+	departmentRepo := repository.NewDepartmentRepository(pool)
+	teamRepo := repository.NewTeamRepository(pool)
+	ticketRepo := repository.NewTicketRepository(pool)
+	messageRepo := repository.NewTicketMessageRepository(pool)
+	attachmentRepo := repository.NewAttachmentRepository(pool)
 
 	authService := service.NewAuthService(*cfg, service.AuthDependencies{
 		UserRepo:          userRepo,
@@ -62,17 +67,36 @@ func main() {
 	})
 	authMiddleware := auth.NewAuthMiddleware(authService.TokenManager(), userRepo, staffRepo)
 
+	staffService := service.NewStaffService(*cfg, service.OrgDependencies{
+		DepartmentRepo: departmentRepo,
+		TeamRepo:       teamRepo,
+		StaffRepo:      staffRepo,
+	})
+
+	ticketService := service.NewTicketService(service.TicketDependencies{
+		TicketRepo:     ticketRepo,
+		MessageRepo:    messageRepo,
+		AttachmentRepo: attachmentRepo,
+		DepartmentRepo: departmentRepo,
+		TeamRepo:       teamRepo,
+		StaffRepo:      staffRepo,
+	})
+
 	app := fiber.New()
 	httptransport.RegisterMiddlewares(app, logger)
 
 	healthHandler := handlers.NewHealthHandler()
 	usersHandler := handlers.NewUsersHandler(authService)
-	staffHandler := handlers.NewStaffHandler(authService)
+	staffHandler := handlers.NewStaffHandler(authService, staffService)
+	ticketsHandler := handlers.NewTicketsHandler(ticketService)
+	staffTicketsHandler := handlers.NewStaffTicketsHandler(ticketService)
 
 	httptransport.RegisterRoutes(app, httptransport.RouteConfig{
 		Health:         healthHandler,
 		Users:          usersHandler,
 		Staff:          staffHandler,
+		Tickets:        ticketsHandler,
+		StaffTickets:   staffTicketsHandler,
 		AuthMiddleware: authMiddleware,
 	})
 

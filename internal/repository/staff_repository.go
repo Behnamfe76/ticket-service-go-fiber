@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,7 +17,17 @@ type StaffRepository interface {
 	Update(ctx context.Context, staff *domain.StaffMember) error
 	GetByID(ctx context.Context, id string) (*domain.StaffMember, error)
 	GetByEmail(ctx context.Context, email string) (*domain.StaffMember, error)
-	ListActive(ctx context.Context) ([]domain.StaffMember, error)
+	List(ctx context.Context, filter StaffFilter) ([]domain.StaffMember, error)
+}
+
+// StaffFilter defines query params for staff listing.
+type StaffFilter struct {
+	Role         *domain.StaffRole
+	TeamID       *string
+	DepartmentID *string
+	Active       *bool
+	Limit        int
+	Offset       int
 }
 
 type staffRepository struct {
@@ -115,12 +127,45 @@ func (r *staffRepository) GetByEmail(ctx context.Context, email string) (*domain
 	return &staff, nil
 }
 
-func (r *staffRepository) ListActive(ctx context.Context) ([]domain.StaffMember, error) {
-	const query = `
+func (r *staffRepository) List(ctx context.Context, filter StaffFilter) ([]domain.StaffMember, error) {
+	query := `
         SELECT id, name, email, password_hash, role, department_id, team_id, active_flag, created_at, updated_at
-        FROM staff_members WHERE active_flag = TRUE`
+        FROM staff_members`
+	args := []any{}
+	clauses := []string{}
 
-	rows, err := r.pool.Query(ctx, query)
+	if filter.Role != nil {
+		args = append(args, *filter.Role)
+		clauses = append(clauses, fmt.Sprintf("role=$%d", len(args)))
+	}
+	if filter.TeamID != nil {
+		args = append(args, *filter.TeamID)
+		clauses = append(clauses, fmt.Sprintf("team_id=$%d", len(args)))
+	}
+	if filter.DepartmentID != nil {
+		args = append(args, *filter.DepartmentID)
+		clauses = append(clauses, fmt.Sprintf("department_id=$%d", len(args)))
+	}
+	if filter.Active != nil {
+		args = append(args, *filter.Active)
+		clauses = append(clauses, fmt.Sprintf("active_flag=$%d", len(args)))
+	}
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+
+	query += " ORDER BY created_at DESC"
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

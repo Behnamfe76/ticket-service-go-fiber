@@ -14,11 +14,13 @@ import (
 
 // TicketFilter captures staff search parameters.
 type TicketFilter struct {
+	RequesterID  *string
 	DepartmentID *string
 	TeamID       *string
 	AssigneeID   *string
 	Statuses     []domain.TicketStatus
 	Priorities   []domain.TicketPriority
+	SearchTerm   *string
 	CreatedFrom  *time.Time
 	CreatedTo    *time.Time
 	UpdatedFrom  *time.Time
@@ -131,19 +133,12 @@ func (r *ticketRepository) fetchSingle(ctx context.Context, query string, arg an
 }
 
 func (r *ticketRepository) ListByUser(ctx context.Context, userID string, limit, offset int) ([]domain.Ticket, error) {
-	const query = `
-        SELECT id, external_key, requester_user_id, department_id, team_id, assignee_staff_id,
-               title, description, status, priority, tags, created_at, updated_at, closed_at
-        FROM tickets
-        WHERE requester_user_id=$1
-        ORDER BY created_at DESC
-        LIMIT $2 OFFSET $3`
-	rows, err := r.pool.Query(ctx, query, userID, limit, offset)
-	if err != nil {
-		return nil, err
+	filter := TicketFilter{
+		RequesterID: &userID,
+		Limit:       limit,
+		Offset:      offset,
 	}
-	defer rows.Close()
-	return scanTickets(rows)
+	return r.ListWithFilter(ctx, filter)
 }
 
 func (r *ticketRepository) ListWithFilter(ctx context.Context, filter TicketFilter) ([]domain.Ticket, error) {
@@ -153,6 +148,10 @@ func (r *ticketRepository) ListWithFilter(ctx context.Context, filter TicketFilt
 	clauses := []string{"1=1"}
 	args := []any{}
 
+	if filter.RequesterID != nil {
+		args = append(args, *filter.RequesterID)
+		clauses = append(clauses, fmt.Sprintf("requester_user_id=$%d", len(args)))
+	}
 	if filter.DepartmentID != nil {
 		args = append(args, *filter.DepartmentID)
 		clauses = append(clauses, fmt.Sprintf("department_id=$%d", len(args)))
@@ -196,6 +195,12 @@ func (r *ticketRepository) ListWithFilter(ctx context.Context, filter TicketFilt
 	if filter.UpdatedTo != nil {
 		args = append(args, *filter.UpdatedTo)
 		clauses = append(clauses, fmt.Sprintf("updated_at <= $%d", len(args)))
+	}
+	if filter.SearchTerm != nil && strings.TrimSpace(*filter.SearchTerm) != "" {
+		search := "%" + strings.ToLower(strings.TrimSpace(*filter.SearchTerm)) + "%"
+		args = append(args, search)
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf("(LOWER(title) LIKE %s OR LOWER(description) LIKE %s)", placeholder, placeholder))
 	}
 
 	limit := filter.Limit

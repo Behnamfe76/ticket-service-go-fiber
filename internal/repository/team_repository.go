@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,7 +16,7 @@ type TeamRepository interface {
 	Create(ctx context.Context, team *domain.Team) error
 	Update(ctx context.Context, team *domain.Team) error
 	GetByID(ctx context.Context, id string) (*domain.Team, error)
-	ListActiveByDepartment(ctx context.Context, departmentID string) ([]domain.Team, error)
+	List(ctx context.Context, departmentID *string, includeInactive bool) ([]domain.Team, error)
 }
 
 type teamRepository struct {
@@ -78,11 +80,23 @@ func (r *teamRepository) GetByID(ctx context.Context, id string) (*domain.Team, 
 	return &team, nil
 }
 
-func (r *teamRepository) ListActiveByDepartment(ctx context.Context, departmentID string) ([]domain.Team, error) {
-	const query = `
+func (r *teamRepository) List(ctx context.Context, departmentID *string, includeInactive bool) ([]domain.Team, error) {
+	base := `
         SELECT id, department_id, name, description, is_active, created_at, updated_at
-        FROM teams WHERE department_id=$1 AND is_active=TRUE`
-	rows, err := r.pool.Query(ctx, query, departmentID)
+        FROM teams`
+	args := []any{}
+	clauses := []string{}
+	if departmentID != nil {
+		args = append(args, *departmentID)
+		clauses = append(clauses, fmt.Sprintf("department_id=$%d", len(args)))
+	}
+	if !includeInactive {
+		clauses = append(clauses, "is_active=TRUE")
+	}
+	if len(clauses) > 0 {
+		base += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	rows, err := r.pool.Query(ctx, base, args...)
 	if err != nil {
 		return nil, err
 	}

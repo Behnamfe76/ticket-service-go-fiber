@@ -14,7 +14,7 @@ type DepartmentRepository interface {
 	Create(ctx context.Context, dept *domain.Department) error
 	Update(ctx context.Context, dept *domain.Department) error
 	GetByID(ctx context.Context, id string) (*domain.Department, error)
-	ListActive(ctx context.Context) ([]domain.Department, error)
+	List(ctx context.Context, includeInactive bool) ([]domain.Department, error)
 }
 
 type departmentRepository struct {
@@ -75,10 +75,13 @@ func (r *departmentRepository) GetByID(ctx context.Context, id string) (*domain.
 	return &dept, nil
 }
 
-func (r *departmentRepository) ListActive(ctx context.Context) ([]domain.Department, error) {
-	const query = `
+func (r *departmentRepository) List(ctx context.Context, includeInactive bool) ([]domain.Department, error) {
+	query := `
         SELECT id, name, description, is_active, created_at, updated_at
-        FROM departments WHERE is_active = TRUE`
+        FROM departments`
+	if !includeInactive {
+		query += " WHERE is_active = TRUE"
+	}
 	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
