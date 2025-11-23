@@ -14,6 +14,7 @@ type Config struct {
 	Postgres PostgresConfig
 	Redis    RedisConfig
 	Logger   LoggerConfig
+	Auth     AuthConfig
 }
 
 // AppConfig controls server level behavior.
@@ -44,6 +45,14 @@ type RedisConfig struct {
 // LoggerConfig configures logging behavior.
 type LoggerConfig struct {
 	Level string
+}
+
+// AuthConfig defines authentication parameters.
+type AuthConfig struct {
+	JWTSecret               string
+	AccessTokenTTLMinutes   int
+	PasswordResetTTLMinutes int
+	BcryptCost              int
 }
 
 // Load reads configuration from environment variables, applying defaults where possible.
@@ -83,6 +92,12 @@ func Load() (*Config, error) {
 		},
 		Logger: LoggerConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
+		},
+		Auth: AuthConfig{
+			JWTSecret:               getEnv("AUTH_JWT_SECRET", "dev-secret"),
+			AccessTokenTTLMinutes:   getEnvAsInt("AUTH_ACCESS_TOKEN_TTL_MINUTES", 60),
+			PasswordResetTTLMinutes: getEnvAsInt("AUTH_PASSWORD_RESET_TTL_MINUTES", 30),
+			BcryptCost:              getEnvAsInt("AUTH_BCRYPT_COST", 12),
 		},
 	}
 

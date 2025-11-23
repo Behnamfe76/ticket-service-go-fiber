@@ -12,9 +12,12 @@ import (
 
 	httptransport "github.com/spec-kit/ticket-service/internal/api/http"
 	"github.com/spec-kit/ticket-service/internal/api/http/handlers"
+	"github.com/spec-kit/ticket-service/internal/auth"
 	"github.com/spec-kit/ticket-service/internal/config"
 	"github.com/spec-kit/ticket-service/internal/observability"
 	"github.com/spec-kit/ticket-service/internal/persistence"
+	"github.com/spec-kit/ticket-service/internal/repository"
+	"github.com/spec-kit/ticket-service/internal/service"
 )
 
 func main() {
@@ -47,11 +50,31 @@ func main() {
 	redis := persistence.NewRedis(cfg.Redis, logger)
 	defer redis.Close()
 
+	pool := pg.PoolHandle()
+	userRepo := repository.NewUserRepository(pool)
+	staffRepo := repository.NewStaffRepository(pool)
+	resetRepo := repository.NewPasswordResetRepository(pool)
+
+	authService := service.NewAuthService(*cfg, service.AuthDependencies{
+		UserRepo:          userRepo,
+		StaffRepo:         staffRepo,
+		PasswordResetRepo: resetRepo,
+	})
+	authMiddleware := auth.NewAuthMiddleware(authService.TokenManager(), userRepo, staffRepo)
+
 	app := fiber.New()
 	httptransport.RegisterMiddlewares(app, logger)
 
 	healthHandler := handlers.NewHealthHandler()
-	httptransport.RegisterRoutes(app, healthHandler)
+	usersHandler := handlers.NewUsersHandler(authService)
+	staffHandler := handlers.NewStaffHandler(authService)
+
+	httptransport.RegisterRoutes(app, httptransport.RouteConfig{
+		Health:         healthHandler,
+		Users:          usersHandler,
+		Staff:          staffHandler,
+		AuthMiddleware: authMiddleware,
+	})
 
 	go func() {
 		if err := app.Listen(cfg.App.Addr()); err != nil {
