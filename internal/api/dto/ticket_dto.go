@@ -55,6 +55,7 @@ type TicketDetailResponse struct {
 	UpdatedAt    time.Time               `json:"updated_at"`
 	ClosedAt     *time.Time              `json:"closed_at"`
 	Messages     []TicketMessageResponse `json:"messages"`
+	History      []TicketHistoryResponse `json:"history"`
 }
 
 // TicketMessageResponse represents thread message.
@@ -90,4 +91,36 @@ type AttachmentRequest struct {
 	FileName   string `json:"file_name"`
 	MimeType   string `json:"mime_type"`
 	SizeBytes  int64  `json:"size_bytes"`
+}
+
+// UpdateStatusRequest payload.
+type UpdateStatusRequest struct {
+	NewStatus domain.TicketStatus `json:"new_status"`
+	Comment   string              `json:"comment"`
+}
+
+// UpdatePriorityRequest payload.
+type UpdatePriorityRequest struct {
+	NewPriority domain.TicketPriority `json:"new_priority"`
+}
+
+// AssignStaffRequest payload.
+type AssignStaffRequest struct {
+	AssigneeStaffID string `json:"assignee_staff_id"`
+}
+
+// AssignTeamRequest payload.
+type AssignTeamRequest struct {
+	TeamID string `json:"team_id"`
+}
+
+// TicketHistoryResponse for API responses.
+type TicketHistoryResponse struct {
+	ID            string                   `json:"id"`
+	ChangeType    domain.TicketChangeType  `json:"change_type"`
+	ChangedByType domain.MessageAuthorType `json:"changed_by_type"`
+	ChangedByID   *string                  `json:"changed_by_id"`
+	OldValue      map[string]any           `json:"old_value"`
+	NewValue      map[string]any           `json:"new_value"`
+	CreatedAt     time.Time                `json:"created_at"`
 }

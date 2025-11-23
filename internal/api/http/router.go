@@ -58,8 +58,17 @@ func RegisterRoutes(app *fiber.App, cfg RouteConfig) {
 	adminGroup.Get("/members/:id", cfg.Staff.GetStaff)
 	adminGroup.Put("/members/:id", cfg.Staff.UpdateStaff)
 
-	staffTickets := staffBase.Group("/tickets", cfg.AuthMiddleware.Handle, auth.RequireStaffRole(domain.StaffRoleAgent, domain.StaffRoleTeamLead, domain.StaffRoleAdmin))
+	staffTicketsBase := staffBase.Group("/tickets")
+	staffTickets := staffTicketsBase.Group("", cfg.AuthMiddleware.Handle, auth.RequireStaffRole(domain.StaffRoleAgent, domain.StaffRoleTeamLead, domain.StaffRoleAdmin))
 	staffTickets.Get("/", cfg.StaffTickets.ListStaffTickets)
 	staffTickets.Get("/:id", cfg.StaffTickets.GetStaffTicket)
 	staffTickets.Post("/:id/messages", cfg.StaffTickets.AddStaffMessage)
+	staffTickets.Post("/:id/assign/self", cfg.StaffTickets.SelfAssignTicket)
+	staffTickets.Post("/:id/status", cfg.StaffTickets.UpdateStatus)
+	staffTickets.Post("/:id/priority", cfg.StaffTickets.UpdatePriority)
+	staffTickets.Get("/:id/history", cfg.StaffTickets.GetHistory)
+
+	assignGroup := staffTicketsBase.Group("", cfg.AuthMiddleware.Handle, auth.RequireStaffRole(domain.StaffRoleTeamLead, domain.StaffRoleAdmin))
+	assignGroup.Post("/:id/assign", cfg.StaffTickets.AssignTicket)
+	assignGroup.Post("/:id/assign/team", cfg.StaffTickets.AssignTicketToTeam)
 }

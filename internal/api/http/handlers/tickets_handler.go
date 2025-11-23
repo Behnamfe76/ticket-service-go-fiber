@@ -81,7 +81,11 @@ func (h *TicketsHandler) GetTicket(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"data": ticketDetail(ticket, msgs)})
+	history, err := h.service.ListHistoryForUser(c.Context(), principal.User.ID, ticket.ID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"data": ticketDetail(ticket, msgs, history)})
 }
 
 // AddMessage POST /tickets/:id/messages.
@@ -189,11 +193,12 @@ func ticketSummary(ticket *domain.Ticket) dto.TicketSummary {
 	}
 }
 
-func ticketDetail(ticket *domain.Ticket, messages []domain.TicketMessage) dto.TicketDetailResponse {
+func ticketDetail(ticket *domain.Ticket, messages []domain.TicketMessage, history []domain.TicketHistory) dto.TicketDetailResponse {
 	msgs := make([]dto.TicketMessageResponse, 0, len(messages))
 	for i := range messages {
 		msgs = append(msgs, ticketMessageResponse(&messages[i]))
 	}
+	historyResp := historyResponses(history)
 	return dto.TicketDetailResponse{
 		ID:           ticket.ID,
 		ExternalKey:  ticket.ExternalKey,
@@ -208,6 +213,7 @@ func ticketDetail(ticket *domain.Ticket, messages []domain.TicketMessage) dto.Ti
 		UpdatedAt:    ticket.UpdatedAt,
 		ClosedAt:     ticket.ClosedAt,
 		Messages:     msgs,
+		History:      historyResp,
 	}
 }
 
@@ -230,4 +236,20 @@ func ticketMessageResponse(msg *domain.TicketMessage) dto.TicketMessageResponse 
 		Attachments: attachments,
 		CreatedAt:   msg.CreatedAt,
 	}
+}
+
+func historyResponses(entries []domain.TicketHistory) []dto.TicketHistoryResponse {
+	resp := make([]dto.TicketHistoryResponse, 0, len(entries))
+	for _, entry := range entries {
+		resp = append(resp, dto.TicketHistoryResponse{
+			ID:            entry.ID,
+			ChangeType:    entry.ChangeType,
+			ChangedByType: entry.ChangedByType,
+			ChangedByID:   entry.ChangedByID,
+			OldValue:      entry.OldValue,
+			NewValue:      entry.NewValue,
+			CreatedAt:     entry.CreatedAt,
+		})
+	}
+	return resp
 }

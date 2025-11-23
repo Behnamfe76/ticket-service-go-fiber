@@ -56,6 +56,7 @@ func main() {
 	resetRepo := repository.NewPasswordResetRepository(pool)
 	departmentRepo := repository.NewDepartmentRepository(pool)
 	teamRepo := repository.NewTeamRepository(pool)
+	ticketHistoryRepo := repository.NewTicketHistoryRepository(pool)
 	ticketRepo := repository.NewTicketRepository(pool)
 	messageRepo := repository.NewTicketMessageRepository(pool)
 	attachmentRepo := repository.NewAttachmentRepository(pool)
@@ -80,6 +81,14 @@ func main() {
 		DepartmentRepo: departmentRepo,
 		TeamRepo:       teamRepo,
 		StaffRepo:      staffRepo,
+		HistoryRepo:    ticketHistoryRepo,
+	})
+
+	assignmentService := service.NewAssignmentService(service.AssignmentDependencies{
+		TicketRepo:  ticketRepo,
+		StaffRepo:   staffRepo,
+		TeamRepo:    teamRepo,
+		HistoryRepo: ticketHistoryRepo,
 	})
 
 	app := fiber.New()
@@ -89,7 +98,7 @@ func main() {
 	usersHandler := handlers.NewUsersHandler(authService)
 	staffHandler := handlers.NewStaffHandler(authService, staffService)
 	ticketsHandler := handlers.NewTicketsHandler(ticketService)
-	staffTicketsHandler := handlers.NewStaffTicketsHandler(ticketService)
+	staffTicketsHandler := handlers.NewStaffTicketsHandler(ticketService, assignmentService)
 
 	httptransport.RegisterRoutes(app, httptransport.RouteConfig{
 		Health:         healthHandler,

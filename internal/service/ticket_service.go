@@ -21,6 +21,7 @@ type TicketService struct {
 	departments repository.DepartmentRepository
 	teams       repository.TeamRepository
 	staff       repository.StaffRepository
+	history     repository.TicketHistoryRepository
 }
 
 // TicketDependencies bundles repositories for ticket service.
@@ -31,6 +32,7 @@ type TicketDependencies struct {
 	DepartmentRepo repository.DepartmentRepository
 	TeamRepo       repository.TeamRepository
 	StaffRepo      repository.StaffRepository
+	HistoryRepo    repository.TicketHistoryRepository
 }
 
 // TicketCreateInput describes ticket creation payload.
@@ -86,6 +88,7 @@ func NewTicketService(deps TicketDependencies) *TicketService {
 		departments: deps.DepartmentRepo,
 		teams:       deps.TeamRepo,
 		staff:       deps.StaffRepo,
+		history:     deps.HistoryRepo,
 	}
 }
 
@@ -275,12 +278,115 @@ func (s *TicketService) CloseTicketAsUser(ctx context.Context, userID, ticketID 
 		return nil, errors.New("ticket cannot be closed in current status")
 	}
 	now := time.Now()
+	oldStatus := ticket.Status
 	ticket.Status = domain.TicketStatusClosed
 	ticket.ClosedAt = &now
 	if err := s.tickets.Update(ctx, ticket); err != nil {
 		return nil, err
 	}
+	if err := s.recordStatusChange(ctx, domain.AuthorTypeUser, &userID, ticket.ID, oldStatus, ticket.Status, "user_closed"); err != nil {
+		return nil, err
+	}
 	return ticket, nil
+}
+
+// UpdateStatus updates ticket status by staff.
+func (s *TicketService) UpdateStatus(ctx context.Context, staff *domain.StaffMember, ticketID string, newStatus domain.TicketStatus, comment string) (*domain.Ticket, error) {
+	if staff == nil {
+		return nil, errors.New("staff required")
+	}
+	ticket, err := s.tickets.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if !s.staffCanAccessTicket(staff, ticket) {
+		return nil, errors.New("access denied")
+	}
+	if !isValidTransition(ticket.Status, newStatus) {
+		return nil, errors.New("invalid status transition")
+	}
+	oldStatus := ticket.Status
+	if newStatus == domain.TicketStatusClosed {
+		now := time.Now()
+		ticket.ClosedAt = &now
+	} else if ticket.ClosedAt != nil {
+		ticket.ClosedAt = nil
+	}
+	ticket.Status = newStatus
+	if err := s.tickets.Update(ctx, ticket); err != nil {
+		return nil, err
+	}
+	if err := s.recordStatusChange(ctx, domain.AuthorTypeStaff, &staff.ID, ticket.ID, oldStatus, newStatus, comment); err != nil {
+		return nil, err
+	}
+	return ticket, nil
+}
+
+// UpdatePriority changes ticket priority by staff.
+func (s *TicketService) UpdatePriority(ctx context.Context, staff *domain.StaffMember, ticketID string, newPriority domain.TicketPriority) (*domain.Ticket, error) {
+	if staff == nil {
+		return nil, errors.New("staff required")
+	}
+	ticket, err := s.tickets.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if !s.staffCanAccessTicket(staff, ticket) {
+		return nil, errors.New("access denied")
+	}
+	oldPriority := ticket.Priority
+	ticket.Priority = newPriority
+	if err := s.tickets.Update(ctx, ticket); err != nil {
+		return nil, err
+	}
+	if err := s.recordPriorityChange(ctx, domain.AuthorTypeStaff, &staff.ID, ticket.ID, oldPriority, newPriority); err != nil {
+		return nil, err
+	}
+	return ticket, nil
+}
+
+// ListHistoryForStaff returns history entries for staff.
+func (s *TicketService) ListHistoryForStaff(ctx context.Context, staff *domain.StaffMember, ticketID string, limit, offset int) ([]domain.TicketHistory, error) {
+	if s.history == nil {
+		return []domain.TicketHistory{}, nil
+	}
+	if staff == nil {
+		return nil, errors.New("staff required")
+	}
+	ticket, err := s.tickets.GetByID(ctx, ticketID)
+	// ensure access
+	if err != nil {
+		return nil, err
+	}
+	if !s.staffCanAccessTicket(staff, ticket) {
+		return nil, errors.New("access denied")
+	}
+	return s.history.ListByTicket(ctx, ticketID, limit, offset)
+}
+
+// ListHistoryForUser returns user-safe history entries.
+func (s *TicketService) ListHistoryForUser(ctx context.Context, userID, ticketID string) ([]domain.TicketHistory, error) {
+	if s.history == nil {
+		return []domain.TicketHistory{}, nil
+	}
+	ticket, err := s.tickets.GetByID(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket.RequesterID != userID {
+		return nil, errors.New("access denied")
+	}
+	history, err := s.history.ListByTicket(ctx, ticketID, 100, 0)
+	if err != nil {
+		return nil, err
+	}
+	allowed := []domain.TicketHistory{}
+	for _, entry := range history {
+		if entry.ChangeType == domain.ChangeTypeStatus || entry.ChangeType == domain.ChangeTypeAssignee || entry.ChangeType == domain.ChangeTypeTeam {
+			allowed = append(allowed, entry)
+		}
+	}
+	return allowed, nil
 }
 
 func (s *TicketService) applyStaffScope(filter *repository.TicketFilter, staff *domain.StaffMember) {
@@ -343,4 +449,61 @@ func (s *TicketService) messagesWithAttachments(ctx context.Context, ticketID st
 
 func generateTicketKey() string {
 	return "TCK-" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
+}
+
+var allowedTransitions = map[domain.TicketStatus][]domain.TicketStatus{
+	domain.TicketStatusOpen:        {domain.TicketStatusInProgress, domain.TicketStatusCancelled},
+	domain.TicketStatusInProgress:  {domain.TicketStatusPendingUser, domain.TicketStatusResolved, domain.TicketStatusCancelled},
+	domain.TicketStatusPendingUser: {domain.TicketStatusInProgress, domain.TicketStatusResolved, domain.TicketStatusCancelled},
+	domain.TicketStatusResolved:    {domain.TicketStatusClosed, domain.TicketStatusInProgress},
+	domain.TicketStatusClosed:      {},
+	domain.TicketStatusCancelled:   {},
+}
+
+func isValidTransition(current, next domain.TicketStatus) bool {
+	for _, candidate := range allowedTransitions[current] {
+		if candidate == next {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *TicketService) recordStatusChange(ctx context.Context, actorType domain.MessageAuthorType, actorID *string, ticketID string, oldStatus, newStatus domain.TicketStatus, comment string) error {
+	if s.history == nil {
+		return nil
+	}
+	entry := &domain.TicketHistory{
+		TicketID:      ticketID,
+		ChangedByType: actorType,
+		ChangedByID:   actorID,
+		ChangeType:    domain.ChangeTypeStatus,
+		OldValue: map[string]any{
+			"status": oldStatus,
+		},
+		NewValue: map[string]any{
+			"status":  newStatus,
+			"comment": comment,
+		},
+	}
+	return s.history.Create(ctx, entry)
+}
+
+func (s *TicketService) recordPriorityChange(ctx context.Context, actorType domain.MessageAuthorType, actorID *string, ticketID string, oldPriority, newPriority domain.TicketPriority) error {
+	if s.history == nil {
+		return nil
+	}
+	entry := &domain.TicketHistory{
+		TicketID:      ticketID,
+		ChangedByType: actorType,
+		ChangedByID:   actorID,
+		ChangeType:    domain.ChangeTypePriority,
+		OldValue: map[string]any{
+			"priority": oldPriority,
+		},
+		NewValue: map[string]any{
+			"priority": newPriority,
+		},
+	}
+	return s.history.Create(ctx, entry)
 }

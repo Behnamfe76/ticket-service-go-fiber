@@ -11,7 +11,7 @@ import (
 // TicketHistoryRepository stores audit entries.
 type TicketHistoryRepository interface {
 	Create(ctx context.Context, history *domain.TicketHistory) error
-	ListByTicket(ctx context.Context, ticketID string) ([]domain.TicketHistory, error)
+	ListByTicket(ctx context.Context, ticketID string, limit, offset int) ([]domain.TicketHistory, error)
 }
 
 type ticketHistoryRepository struct {
@@ -38,11 +38,17 @@ func (r *ticketHistoryRepository) Create(ctx context.Context, history *domain.Ti
 	).Scan(&history.ID, &history.CreatedAt)
 }
 
-func (r *ticketHistoryRepository) ListByTicket(ctx context.Context, ticketID string) ([]domain.TicketHistory, error) {
-	const query = `
+func (r *ticketHistoryRepository) ListByTicket(ctx context.Context, ticketID string, limit, offset int) ([]domain.TicketHistory, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	const queryTemplate = `
         SELECT id, ticket_id, changed_by_type, changed_by_id, change_type, old_value, new_value, created_at
-        FROM ticket_history WHERE ticket_id=$1 ORDER BY created_at ASC`
-	rows, err := r.pool.Query(ctx, query, ticketID)
+        FROM ticket_history WHERE ticket_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	rows, err := r.pool.Query(ctx, queryTemplate, ticketID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
