@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -36,4 +37,12 @@ func (r *Redis) Close() {
 	if r != nil && r.Client != nil {
 		_ = r.Client.Close()
 	}
+}
+
+// Ping verifies Redis connectivity.
+func (r *Redis) Ping(ctx context.Context) error {
+	if r == nil || r.Client == nil {
+		return errors.New("redis client not configured")
+	}
+	return r.Client.Ping(ctx).Err()
 }

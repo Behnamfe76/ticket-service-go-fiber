@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -67,4 +68,12 @@ func (p *Postgres) PoolHandle() *pgxpool.Pool {
 		return nil
 	}
 	return p.Pool
+}
+
+// Ping verifies database connectivity.
+func (p *Postgres) Ping(ctx context.Context) error {
+	if p == nil || p.Pool == nil {
+		return errors.New("postgres pool not configured")
+	}
+	return p.Pool.Ping(ctx)
 }

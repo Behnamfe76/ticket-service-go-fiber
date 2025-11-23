@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -20,10 +21,12 @@ type Config struct {
 
 // AppConfig controls server level behavior.
 type AppConfig struct {
-	Name string
-	Env  string
-	Host string
-	Port string
+	Name                  string
+	Env                   string
+	Host                  string
+	Port                  string
+	Version               string
+	RequestTimeoutSeconds int
 }
 
 // PostgresConfig holds DB connection values.
@@ -79,10 +82,12 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		App: AppConfig{
-			Name: getEnv("APP_NAME", "support-ticket-service"),
-			Env:  getEnv("APP_ENV", "development"),
-			Host: getEnv("APP_HOST", "0.0.0.0"),
-			Port: getEnv("APP_PORT", "8080"),
+			Name:                  getEnv("APP_NAME", "support-ticket-service"),
+			Env:                   getEnv("APP_ENV", "development"),
+			Host:                  getEnv("APP_HOST", "0.0.0.0"),
+			Port:                  getEnv("APP_PORT", "8080"),
+			Version:               getEnv("APP_VERSION", "dev"),
+			RequestTimeoutSeconds: getEnvAsInt("HTTP_REQUEST_TIMEOUT_SECONDS", 30),
 		},
 		Postgres: PostgresConfig{
 			DSN:            os.Getenv("POSTGRES_DSN"),
@@ -118,6 +123,14 @@ func Load() (*Config, error) {
 // Addr returns the HTTP bind address.
 func (a AppConfig) Addr() string {
 	return fmt.Sprintf("%s:%s", a.Host, a.Port)
+}
+
+// RequestTimeout returns the configured request timeout duration.
+func (a AppConfig) RequestTimeout() time.Duration {
+	if a.RequestTimeoutSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(a.RequestTimeoutSeconds) * time.Second
 }
 
 func getEnv(key, fallback string) string {

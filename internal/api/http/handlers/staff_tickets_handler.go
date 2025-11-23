@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/spec-kit/ticket-service/internal/auth"
 	"github.com/spec-kit/ticket-service/internal/domain"
 	"github.com/spec-kit/ticket-service/internal/service"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 // StaffTicketsHandler handles staff ticket read/message endpoints.
@@ -67,10 +67,10 @@ func (h *StaffTicketsHandler) AddStaffMessage(c *fiber.Ctx) error {
 	}
 	var req dto.CreateMessageRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if strings.TrimSpace(req.Body) == "" {
-		return fiber.NewError(http.StatusBadRequest, "body required")
+		return apperrors.NewValidationError("body required", nil)
 	}
 	msgType := domain.MessageTypePublicReply
 	if req.MessageType != nil {
@@ -87,7 +87,7 @@ func (h *StaffTicketsHandler) AddStaffMessage(c *fiber.Ctx) error {
 	}
 	msg, err := h.tickets.AddMessage(c.Context(), domain.SubjectTypeStaff, staff.ID, staff, c.Params("id"), msgType, req.Body, attachments)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"data": ticketMessageResponse(msg)})
 }
@@ -100,7 +100,7 @@ func (h *StaffTicketsHandler) SelfAssignTicket(c *fiber.Ctx) error {
 	}
 	ticket, err := h.assignments.SelfAssignTicket(c.Context(), staff, c.Params("id"))
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": ticketSummary(ticket)})
 }
@@ -113,14 +113,14 @@ func (h *StaffTicketsHandler) AssignTicket(c *fiber.Ctx) error {
 	}
 	var req dto.AssignStaffRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.AssigneeStaffID == "" {
-		return fiber.NewError(http.StatusBadRequest, "assignee_staff_id required")
+		return apperrors.NewValidationError("assignee_staff_id required", nil)
 	}
 	ticket, err := h.assignments.AssignTicketToStaff(c.Context(), staff, c.Params("id"), req.AssigneeStaffID)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": ticketSummary(ticket)})
 }
@@ -133,14 +133,14 @@ func (h *StaffTicketsHandler) AssignTicketToTeam(c *fiber.Ctx) error {
 	}
 	var req dto.AssignTeamRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.TeamID == "" {
-		return fiber.NewError(http.StatusBadRequest, "team_id required")
+		return apperrors.NewValidationError("team_id required", nil)
 	}
 	ticket, err := h.assignments.AssignTicketToTeam(c.Context(), staff, c.Params("id"), req.TeamID)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": ticketSummary(ticket)})
 }
@@ -153,14 +153,14 @@ func (h *StaffTicketsHandler) UpdateStatus(c *fiber.Ctx) error {
 	}
 	var req dto.UpdateStatusRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.NewStatus == "" {
-		return fiber.NewError(http.StatusBadRequest, "new_status required")
+		return apperrors.NewValidationError("new_status required", nil)
 	}
 	ticket, err := h.tickets.UpdateStatus(c.Context(), staff, c.Params("id"), req.NewStatus, req.Comment)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": ticketSummary(ticket)})
 }
@@ -173,14 +173,14 @@ func (h *StaffTicketsHandler) UpdatePriority(c *fiber.Ctx) error {
 	}
 	var req dto.UpdatePriorityRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.NewPriority == "" {
-		return fiber.NewError(http.StatusBadRequest, "new_priority required")
+		return apperrors.NewValidationError("new_priority required", nil)
 	}
 	ticket, err := h.tickets.UpdatePriority(c.Context(), staff, c.Params("id"), req.NewPriority)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": ticketSummary(ticket)})
 }
@@ -195,7 +195,7 @@ func (h *StaffTicketsHandler) GetHistory(c *fiber.Ctx) error {
 	pageSize := parseInt(c.Query("page_size"), 50)
 	history, err := h.tickets.ListHistoryForStaff(c.Context(), staff, c.Params("id"), pageSize, (page-1)*pageSize)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": historyResponses(history)})
 }
@@ -203,7 +203,7 @@ func (h *StaffTicketsHandler) GetHistory(c *fiber.Ctx) error {
 func staffPrincipal(c *fiber.Ctx) (*domain.StaffMember, error) {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok || principal.Staff == nil {
-		return nil, fiber.NewError(http.StatusUnauthorized, "staff required")
+		return nil, apperrors.NewUnauthorized("staff required")
 	}
 	return principal.Staff, nil
 }

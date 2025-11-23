@@ -34,6 +34,8 @@ func main() {
 	}
 	defer logger.Sync() //nolint:errcheck
 
+	metrics := observability.NewMetrics()
+
 	dispatcher := events.NewInMemoryDispatcher()
 	notificationSvc := service.NewNotificationService(dispatcher, logger, cfg.Notification)
 	worker.StartNotificationWorker(notificationSvc)
@@ -100,9 +102,9 @@ func main() {
 	})
 
 	app := fiber.New()
-	httptransport.RegisterMiddlewares(app, logger)
+	httptransport.RegisterMiddlewares(app, logger, metrics, cfg.App.RequestTimeout())
 
-	healthHandler := handlers.NewHealthHandler()
+	healthHandler := handlers.NewHealthHandler(cfg.App.Name, cfg.App.Version, pg, redis)
 	usersHandler := handlers.NewUsersHandler(authService)
 	staffHandler := handlers.NewStaffHandler(authService, staffService)
 	ticketsHandler := handlers.NewTicketsHandler(ticketService)

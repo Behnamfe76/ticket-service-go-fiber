@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/spec-kit/ticket-service/internal/domain"
 	"github.com/spec-kit/ticket-service/internal/repository"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 const principalKey = "auth_principal"
@@ -37,17 +37,17 @@ func NewAuthMiddleware(tokens *TokenManager, users repository.UserRepository, st
 func (m *AuthMiddleware) Handle(c *fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	if authHeader == "" {
-		return fiber.NewError(http.StatusUnauthorized, "missing authorization header")
+		return apperrors.NewUnauthorized("missing authorization header")
 	}
 
 	parts := strings.SplitN(authHeader, " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return fiber.NewError(http.StatusUnauthorized, "invalid authorization header")
+		return apperrors.NewUnauthorized("invalid authorization header")
 	}
 
 	claims, err := m.tokens.ParseToken(parts[1])
 	if err != nil {
-		return fiber.NewError(http.StatusUnauthorized, "invalid token")
+		return apperrors.NewUnauthorized("invalid token")
 	}
 
 	principal := &Principal{SubjectType: claims.Subject, Role: claims.Role}
@@ -57,22 +57,22 @@ func (m *AuthMiddleware) Handle(c *fiber.Ctx) error {
 		user, err := m.users.GetByID(c.Context(), claims.SubjectID)
 		if err != nil {
 			if err == pgx.ErrNoRows {
-				return fiber.NewError(http.StatusUnauthorized, "user not found")
+				return apperrors.NewUnauthorized("user not found")
 			}
-			return err
+			return apperrors.MapError(err)
 		}
 		principal.User = user
 	case domain.SubjectTypeStaff:
 		staff, err := m.staff.GetByID(c.Context(), claims.SubjectID)
 		if err != nil {
 			if err == pgx.ErrNoRows {
-				return fiber.NewError(http.StatusUnauthorized, "staff not found")
+				return apperrors.NewUnauthorized("staff not found")
 			}
-			return err
+			return apperrors.MapError(err)
 		}
 		principal.Staff = staff
 	default:
-		return fiber.NewError(http.StatusUnauthorized, "unknown subject")
+		return apperrors.NewUnauthorized("unknown subject")
 	}
 
 	c.Locals(principalKey, principal)

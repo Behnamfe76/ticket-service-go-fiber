@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"net/http"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
@@ -10,6 +9,7 @@ import (
 	"github.com/spec-kit/ticket-service/internal/auth"
 	"github.com/spec-kit/ticket-service/internal/domain"
 	"github.com/spec-kit/ticket-service/internal/service"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 // StaffHandler exposes staff/auth endpoints.
@@ -27,15 +27,15 @@ func NewStaffHandler(authService *service.AuthService, orgService *service.Staff
 func (h *StaffHandler) Login(c *fiber.Ctx) error {
 	var req dto.StaffLoginRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Email == "" || req.Password == "" {
-		return fiber.NewError(http.StatusBadRequest, "email and password required")
+		return apperrors.NewValidationError("email and password required", nil)
 	}
 
 	staff, token, exp, err := h.authService.LoginStaff(c.Context(), req.Email, req.Password)
 	if err != nil {
-		return fiber.NewError(http.StatusUnauthorized, err.Error())
+		return err
 	}
 
 	return c.JSON(fiber.Map{
@@ -50,15 +50,15 @@ func (h *StaffHandler) Login(c *fiber.Ctx) error {
 func (h *StaffHandler) RequestPasswordReset(c *fiber.Ctx) error {
 	var req dto.PasswordResetRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Email == "" {
-		return fiber.NewError(http.StatusBadRequest, "email required")
+		return apperrors.NewValidationError("email required", nil)
 	}
 
 	token, err := h.authService.RequestPasswordReset(c.Context(), req.Email)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.Status(http.StatusAccepted).JSON(fiber.Map{
 		"data": fiber.Map{
@@ -72,14 +72,14 @@ func (h *StaffHandler) RequestPasswordReset(c *fiber.Ctx) error {
 func (h *StaffHandler) ConfirmPasswordReset(c *fiber.Ctx) error {
 	var req dto.PasswordResetConfirmRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Token == "" || req.NewPassword == "" {
-		return fiber.NewError(http.StatusBadRequest, "token and new password required")
+		return apperrors.NewValidationError("token and new password required", nil)
 	}
 
 	if err := h.authService.ConfirmPasswordReset(c.Context(), req.Token, req.NewPassword); err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": fiber.Map{"status": "password_reset"}})
 }
@@ -88,15 +88,15 @@ func (h *StaffHandler) ConfirmPasswordReset(c *fiber.Ctx) error {
 func (h *StaffHandler) ChangePassword(c *fiber.Ctx) error {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok {
-		return fiber.NewError(http.StatusUnauthorized, "authentication required")
+		return apperrors.NewUnauthorized("authentication required")
 	}
 
 	var req dto.PasswordChangeRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.CurrentPassword == "" || req.NewPassword == "" {
-		return fiber.NewError(http.StatusBadRequest, "current and new password required")
+		return apperrors.NewValidationError("current and new password required", nil)
 	}
 
 	subject := service.AuthSubject{Type: principal.SubjectType}
@@ -106,11 +106,11 @@ func (h *StaffHandler) ChangePassword(c *fiber.Ctx) error {
 	case domain.SubjectTypeStaff:
 		subject.ID = principal.Staff.ID
 	default:
-		return fiber.NewError(http.StatusUnauthorized, "unknown subject")
+		return apperrors.NewUnauthorized("unknown subject")
 	}
 
 	if err := h.authService.ChangePassword(c.Context(), subject, req.CurrentPassword, req.NewPassword); err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": fiber.Map{"status": "password_changed"}})
 }
@@ -123,14 +123,14 @@ func (h *StaffHandler) CreateDepartment(c *fiber.Ctx) error {
 	}
 	var req dto.DepartmentRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Name == "" {
-		return fiber.NewError(http.StatusBadRequest, "name required")
+		return apperrors.NewValidationError("name required", nil)
 	}
 	dept, err := h.orgService.CreateDepartment(c.Context(), admin, req.Name, req.Description)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"data": departmentResponse(dept)})
 }
@@ -178,7 +178,7 @@ func (h *StaffHandler) UpdateDepartment(c *fiber.Ctx) error {
 	}
 	var req dto.DepartmentRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Name != "" {
 		dept.Name = req.Name
@@ -202,14 +202,14 @@ func (h *StaffHandler) CreateTeam(c *fiber.Ctx) error {
 	}
 	var req dto.TeamRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.DepartmentID == "" || req.Name == "" {
-		return fiber.NewError(http.StatusBadRequest, "department_id and name required")
+		return apperrors.NewValidationError("department_id and name required", nil)
 	}
 	team, err := h.orgService.CreateTeam(c.Context(), admin, req.DepartmentID, req.Name, req.Description)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"data": teamResponse(team)})
 }
@@ -264,7 +264,7 @@ func (h *StaffHandler) UpdateTeam(c *fiber.Ctx) error {
 	}
 	var req dto.TeamRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Name != "" {
 		team.Name = req.Name
@@ -293,14 +293,14 @@ func (h *StaffHandler) CreateStaff(c *fiber.Ctx) error {
 	}
 	var req dto.StaffCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Name == "" || req.Email == "" || req.Password == "" {
-		return fiber.NewError(http.StatusBadRequest, "name, email, password required")
+		return apperrors.NewValidationError("name, email, password required", nil)
 	}
 	staff, err := h.orgService.CreateStaffMember(c.Context(), admin, req.Name, req.Email, req.Password, req.Role, req.TeamID)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"data": staffResponse(staff)})
 }
@@ -344,11 +344,11 @@ func (h *StaffHandler) UpdateStaff(c *fiber.Ctx) error {
 	}
 	var req dto.StaffUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	updated, err := h.orgService.UpdateStaffMember(c.Context(), admin, c.Params("id"), req.Name, req.Email, req.Role, req.TeamID, req.Active)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": staffResponse(updated)})
 }
@@ -356,10 +356,10 @@ func (h *StaffHandler) UpdateStaff(c *fiber.Ctx) error {
 func (h *StaffHandler) requireAdminPrincipal(c *fiber.Ctx) (*domain.StaffMember, error) {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok || principal.Staff == nil {
-		return nil, fiber.NewError(http.StatusUnauthorized, "staff required")
+		return nil, apperrors.NewUnauthorized("staff required")
 	}
 	if principal.Staff.Role != domain.StaffRoleAdmin {
-		return nil, fiber.NewError(http.StatusForbidden, "admin role required")
+		return nil, apperrors.NewForbidden("admin role required")
 	}
 	return principal.Staff, nil
 }

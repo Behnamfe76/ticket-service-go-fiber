@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/spec-kit/ticket-service/internal/auth"
 	"github.com/spec-kit/ticket-service/internal/domain"
 	"github.com/spec-kit/ticket-service/internal/service"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 // TicketsHandler manages end-user ticket endpoints.
@@ -28,14 +28,14 @@ func NewTicketsHandler(ticketService *service.TicketService) *TicketsHandler {
 func (h *TicketsHandler) CreateTicket(c *fiber.Ctx) error {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok || principal.User == nil {
-		return fiber.NewError(http.StatusUnauthorized, "user required")
+		return apperrors.NewUnauthorized("user required")
 	}
 	var req dto.CreateTicketRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.DepartmentID == "" || req.Title == "" || req.Description == "" {
-		return fiber.NewError(http.StatusBadRequest, "department_id, title, description required")
+		return apperrors.NewValidationError("department_id, title, description required", nil)
 	}
 
 	input := service.TicketCreateInput{
@@ -48,7 +48,7 @@ func (h *TicketsHandler) CreateTicket(c *fiber.Ctx) error {
 	}
 	ticket, err := h.service.CreateTicket(c.Context(), principal.User.ID, input)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"data": ticketSummary(ticket)})
 }
@@ -57,7 +57,7 @@ func (h *TicketsHandler) CreateTicket(c *fiber.Ctx) error {
 func (h *TicketsHandler) ListTickets(c *fiber.Ctx) error {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok || principal.User == nil {
-		return fiber.NewError(http.StatusUnauthorized, "user required")
+		return apperrors.NewUnauthorized("user required")
 	}
 	filter := parseUserTicketQuery(c)
 	tickets, err := h.service.ListUserTickets(c.Context(), principal.User.ID, filter)
@@ -75,7 +75,7 @@ func (h *TicketsHandler) ListTickets(c *fiber.Ctx) error {
 func (h *TicketsHandler) GetTicket(c *fiber.Ctx) error {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok || principal.User == nil {
-		return fiber.NewError(http.StatusUnauthorized, "user required")
+		return apperrors.NewUnauthorized("user required")
 	}
 	ticket, msgs, err := h.service.GetTicketForUser(c.Context(), principal.User.ID, c.Params("id"))
 	if err != nil {
@@ -92,14 +92,14 @@ func (h *TicketsHandler) GetTicket(c *fiber.Ctx) error {
 func (h *TicketsHandler) AddMessage(c *fiber.Ctx) error {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok || principal.User == nil {
-		return fiber.NewError(http.StatusUnauthorized, "user required")
+		return apperrors.NewUnauthorized("user required")
 	}
 	var req dto.CreateMessageRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if strings.TrimSpace(req.Body) == "" {
-		return fiber.NewError(http.StatusBadRequest, "body required")
+		return apperrors.NewValidationError("body required", nil)
 	}
 	messageType := domain.MessageTypePublicReply
 	attachments := make([]service.MessageAttachmentInput, 0, len(req.Attachments))
@@ -113,7 +113,7 @@ func (h *TicketsHandler) AddMessage(c *fiber.Ctx) error {
 	}
 	msg, err := h.service.AddMessage(c.Context(), domain.SubjectTypeUser, principal.User.ID, nil, c.Params("id"), messageType, req.Body, attachments)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"data": ticketMessageResponse(msg)})
 }
@@ -122,11 +122,11 @@ func (h *TicketsHandler) AddMessage(c *fiber.Ctx) error {
 func (h *TicketsHandler) CloseTicket(c *fiber.Ctx) error {
 	principal, ok := auth.PrincipalFromContext(c)
 	if !ok || principal.User == nil {
-		return fiber.NewError(http.StatusUnauthorized, "user required")
+		return apperrors.NewUnauthorized("user required")
 	}
 	ticket, err := h.service.CloseTicketAsUser(c.Context(), principal.User.ID, c.Params("id"))
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{"data": ticketSummary(ticket)})
 }

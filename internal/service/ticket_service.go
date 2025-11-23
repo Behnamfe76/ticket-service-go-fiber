@@ -12,6 +12,7 @@ import (
 	"github.com/spec-kit/ticket-service/internal/domain"
 	"github.com/spec-kit/ticket-service/internal/events"
 	"github.com/spec-kit/ticket-service/internal/repository"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 // TicketService coordinates ticket workflows.
@@ -100,21 +101,21 @@ func NewTicketService(deps TicketDependencies) *TicketService {
 func (s *TicketService) CreateTicket(ctx context.Context, userID string, input TicketCreateInput) (*domain.Ticket, error) {
 	dept, err := s.departments.GetByID(ctx, input.DepartmentID)
 	if err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	if !dept.IsActive {
-		return nil, errors.New("department inactive")
+		return nil, apperrors.NewConflict("department inactive", map[string]any{"department_id": input.DepartmentID})
 	}
 	if input.TeamID != nil {
 		team, err := s.teams.GetByID(ctx, *input.TeamID)
 		if err != nil {
-			return nil, err
+			return nil, apperrors.MapError(err)
 		}
 		if !team.IsActive {
-			return nil, errors.New("team inactive")
+			return nil, apperrors.NewConflict("team inactive", map[string]any{"team_id": *input.TeamID})
 		}
 		if team.DepartmentID != input.DepartmentID {
-			return nil, errors.New("team not part of department")
+			return nil, apperrors.NewValidationError("team not part of department", map[string]any{"team_id": *input.TeamID})
 		}
 	}
 
@@ -135,7 +136,7 @@ func (s *TicketService) CreateTicket(ctx context.Context, userID string, input T
 	}
 
 	if err := s.tickets.Create(ctx, ticket); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	s.publishEvent(ctx, events.Event{
 		Type:     events.EventTicketCreated,
@@ -169,10 +170,13 @@ func (s *TicketService) ListUserTickets(ctx context.Context, userID string, filt
 func (s *TicketService) GetTicketForUser(ctx context.Context, userID, ticketID string) (*domain.Ticket, []domain.TicketMessage, error) {
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil {
-		return nil, nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, nil, apperrors.MapError(err)
 	}
 	if ticket.RequesterID != userID {
-		return nil, nil, errors.New("access denied")
+		return nil, nil, apperrors.NewForbidden("access denied")
 	}
 	msgs, err := s.visibleMessagesForUser(ctx, ticket.ID)
 	if err != nil {
@@ -205,10 +209,13 @@ func (s *TicketService) ListStaffTickets(ctx context.Context, staff *domain.Staf
 func (s *TicketService) GetTicketForStaff(ctx context.Context, staff *domain.StaffMember, ticketID string) (*domain.Ticket, []domain.TicketMessage, error) {
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil {
-		return nil, nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, nil, apperrors.MapError(err)
 	}
 	if !s.staffCanAccessTicket(staff, ticket) {
-		return nil, nil, errors.New("access denied")
+		return nil, nil, apperrors.NewForbidden("access denied")
 	}
 	msgs, err := s.messagesWithAttachments(ctx, ticket.ID)
 	if err != nil {
@@ -221,28 +228,31 @@ func (s *TicketService) GetTicketForStaff(ctx context.Context, staff *domain.Sta
 func (s *TicketService) AddMessage(ctx context.Context, actor domain.SubjectType, actorID string, staff *domain.StaffMember, ticketID string, messageType domain.TicketMessageType, body string, attachments []MessageAttachmentInput) (*domain.TicketMessage, error) {
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, apperrors.MapError(err)
 	}
 	switch actor {
 	case domain.SubjectTypeUser:
 		if ticket.RequesterID != actorID {
-			return nil, errors.New("access denied")
+			return nil, apperrors.NewForbidden("access denied")
 		}
 		if messageType != domain.MessageTypePublicReply {
-			return nil, errors.New("users can only post public replies")
+			return nil, apperrors.NewValidationError("users can only post public replies", nil)
 		}
 	case domain.SubjectTypeStaff:
 		if staff == nil {
-			return nil, errors.New("staff context required")
+			return nil, apperrors.NewUnauthorized("staff context required")
 		}
 		if !s.staffCanAccessTicket(staff, ticket) {
-			return nil, errors.New("access denied")
+			return nil, apperrors.NewForbidden("access denied")
 		}
 		if messageType != domain.MessageTypePublicReply && messageType != domain.MessageTypeInternalNote {
-			return nil, errors.New("invalid message type for staff")
+			return nil, apperrors.NewValidationError("invalid message type", nil)
 		}
 	default:
-		return nil, errors.New("unknown actor")
+		return nil, apperrors.NewInternalError(errors.New("unknown actor"))
 	}
 
 	msg := &domain.TicketMessage{
@@ -262,7 +272,7 @@ func (s *TicketService) AddMessage(ctx context.Context, actor domain.SubjectType
 	}
 
 	if err := s.messages.Create(ctx, msg); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	for _, att := range attachments {
 		record := &domain.AttachmentReference{
@@ -273,7 +283,7 @@ func (s *TicketService) AddMessage(ctx context.Context, actor domain.SubjectType
 			SizeBytes:       att.SizeBytes,
 		}
 		if err := s.attachments.Create(ctx, record); err != nil {
-			return nil, err
+			return nil, apperrors.MapError(err)
 		}
 		msg.Attachments = append(msg.Attachments, *record)
 	}
@@ -296,20 +306,23 @@ func (s *TicketService) AddMessage(ctx context.Context, actor domain.SubjectType
 func (s *TicketService) CloseTicketAsUser(ctx context.Context, userID, ticketID string) (*domain.Ticket, error) {
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, apperrors.MapError(err)
 	}
 	if ticket.RequesterID != userID {
-		return nil, errors.New("access denied")
+		return nil, apperrors.NewForbidden("access denied")
 	}
 	if ticket.Status != domain.TicketStatusResolved && ticket.Status != domain.TicketStatusPendingUser {
-		return nil, errors.New("ticket cannot be closed in current status")
+		return nil, apperrors.NewConflict("ticket cannot be closed in current status", map[string]any{"status": ticket.Status})
 	}
 	now := time.Now()
 	oldStatus := ticket.Status
 	ticket.Status = domain.TicketStatusClosed
 	ticket.ClosedAt = &now
 	if err := s.tickets.Update(ctx, ticket); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	if err := s.recordStatusChange(ctx, domain.AuthorTypeUser, &userID, ticket.ID, oldStatus, ticket.Status, "user_closed"); err != nil {
 		return nil, err
@@ -330,17 +343,20 @@ func (s *TicketService) CloseTicketAsUser(ctx context.Context, userID, ticketID 
 // UpdateStatus updates ticket status by staff.
 func (s *TicketService) UpdateStatus(ctx context.Context, staff *domain.StaffMember, ticketID string, newStatus domain.TicketStatus, comment string) (*domain.Ticket, error) {
 	if staff == nil {
-		return nil, errors.New("staff required")
+		return nil, apperrors.NewUnauthorized("staff required")
 	}
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, apperrors.MapError(err)
 	}
 	if !s.staffCanAccessTicket(staff, ticket) {
-		return nil, errors.New("access denied")
+		return nil, apperrors.NewForbidden("access denied")
 	}
 	if !isValidTransition(ticket.Status, newStatus) {
-		return nil, errors.New("invalid status transition")
+		return nil, apperrors.NewConflict("invalid status transition", map[string]any{"from": ticket.Status, "to": newStatus})
 	}
 	oldStatus := ticket.Status
 	if newStatus == domain.TicketStatusClosed {
@@ -351,7 +367,7 @@ func (s *TicketService) UpdateStatus(ctx context.Context, staff *domain.StaffMem
 	}
 	ticket.Status = newStatus
 	if err := s.tickets.Update(ctx, ticket); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	if err := s.recordStatusChange(ctx, domain.AuthorTypeStaff, &staff.ID, ticket.ID, oldStatus, newStatus, comment); err != nil {
 		return nil, err
@@ -372,19 +388,22 @@ func (s *TicketService) UpdateStatus(ctx context.Context, staff *domain.StaffMem
 // UpdatePriority changes ticket priority by staff.
 func (s *TicketService) UpdatePriority(ctx context.Context, staff *domain.StaffMember, ticketID string, newPriority domain.TicketPriority) (*domain.Ticket, error) {
 	if staff == nil {
-		return nil, errors.New("staff required")
+		return nil, apperrors.NewUnauthorized("staff required")
 	}
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, apperrors.MapError(err)
 	}
 	if !s.staffCanAccessTicket(staff, ticket) {
-		return nil, errors.New("access denied")
+		return nil, apperrors.NewForbidden("access denied")
 	}
 	oldPriority := ticket.Priority
 	ticket.Priority = newPriority
 	if err := s.tickets.Update(ctx, ticket); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	if err := s.recordPriorityChange(ctx, domain.AuthorTypeStaff, &staff.ID, ticket.ID, oldPriority, newPriority); err != nil {
 		return nil, err
@@ -407,15 +426,17 @@ func (s *TicketService) ListHistoryForStaff(ctx context.Context, staff *domain.S
 		return []domain.TicketHistory{}, nil
 	}
 	if staff == nil {
-		return nil, errors.New("staff required")
+		return nil, apperrors.NewUnauthorized("staff required")
 	}
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
-	// ensure access
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, apperrors.MapError(err)
 	}
 	if !s.staffCanAccessTicket(staff, ticket) {
-		return nil, errors.New("access denied")
+		return nil, apperrors.NewForbidden("access denied")
 	}
 	return s.history.ListByTicket(ctx, ticketID, limit, offset)
 }
@@ -427,14 +448,17 @@ func (s *TicketService) ListHistoryForUser(ctx context.Context, userID, ticketID
 	}
 	ticket, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.NewNotFound("ticket", map[string]any{"ticket_id": ticketID})
+		}
+		return nil, apperrors.MapError(err)
 	}
 	if ticket.RequesterID != userID {
-		return nil, errors.New("access denied")
+		return nil, apperrors.NewForbidden("access denied")
 	}
 	history, err := s.history.ListByTicket(ctx, ticketID, 100, 0)
 	if err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	allowed := []domain.TicketHistory{}
 	for _, entry := range history {

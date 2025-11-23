@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/spec-kit/ticket-service/internal/config"
 	"github.com/spec-kit/ticket-service/internal/domain"
 	"github.com/spec-kit/ticket-service/internal/repository"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 // StaffService manages organization entities and staff members.
@@ -55,7 +55,7 @@ type OrgDependencies struct {
 
 func requireAdmin(actor *domain.StaffMember) error {
 	if actor == nil || actor.Role != domain.StaffRoleAdmin {
-		return errors.New("admin role required")
+		return apperrors.NewForbidden("admin role required")
 	}
 	return nil
 }
@@ -71,7 +71,7 @@ func (s *StaffService) CreateDepartment(ctx context.Context, actor *domain.Staff
 		IsActive:    true,
 	}
 	if err := s.departments.Create(ctx, dept); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	return dept, nil
 }
@@ -98,7 +98,7 @@ func (s *StaffService) UpdateDepartment(ctx context.Context, actor *domain.Staff
 		return nil, err
 	}
 	if err := s.departments.Update(ctx, dept); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	return dept, nil
 }
@@ -110,10 +110,10 @@ func (s *StaffService) CreateTeam(ctx context.Context, actor *domain.StaffMember
 	}
 	dept, err := s.departments.GetByID(ctx, departmentID)
 	if err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	if !dept.IsActive {
-		return nil, errors.New("department inactive")
+		return nil, apperrors.NewConflict("department inactive", map[string]any{"department_id": departmentID})
 	}
 	team := &domain.Team{
 		DepartmentID: departmentID,
@@ -122,7 +122,7 @@ func (s *StaffService) CreateTeam(ctx context.Context, actor *domain.StaffMember
 		IsActive:     true,
 	}
 	if err := s.teams.Create(ctx, team); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	return team, nil
 }
@@ -150,13 +150,13 @@ func (s *StaffService) UpdateTeam(ctx context.Context, actor *domain.StaffMember
 	}
 	if team.DepartmentID != "" {
 		if dept, err := s.departments.GetByID(ctx, team.DepartmentID); err != nil {
-			return nil, err
+			return nil, apperrors.MapError(err)
 		} else if !dept.IsActive {
-			return nil, errors.New("department inactive")
+			return nil, apperrors.NewConflict("department inactive", map[string]any{"department_id": team.DepartmentID})
 		}
 	}
 	if err := s.teams.Update(ctx, team); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	return team, nil
 }
@@ -167,26 +167,26 @@ func (s *StaffService) CreateStaffMember(ctx context.Context, actor *domain.Staf
 		return nil, err
 	}
 	if existing, err := s.staff.GetByEmail(ctx, email); err == nil && existing != nil {
-		return nil, errors.New("staff email already exists")
+		return nil, apperrors.NewConflict("staff email already exists", map[string]any{"email": email})
 	} else if err != nil && err != pgx.ErrNoRows {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 
 	var departmentID *string
 	if teamID != nil && *teamID != "" {
 		team, err := s.teams.GetByID(ctx, *teamID)
 		if err != nil {
-			return nil, err
+			return nil, apperrors.MapError(err)
 		}
 		if !team.IsActive {
-			return nil, errors.New("team inactive")
+			return nil, apperrors.NewConflict("team inactive", map[string]any{"team_id": *teamID})
 		}
 		departmentID = &team.DepartmentID
 	}
 
 	hash, err := auth.HashPassword(password, s.bcryptCost)
 	if err != nil {
-		return nil, err
+		return nil, apperrors.NewInternalError(err)
 	}
 
 	staff := &domain.StaffMember{
@@ -199,7 +199,7 @@ func (s *StaffService) CreateStaffMember(ctx context.Context, actor *domain.Staf
 		Active:       true,
 	}
 	if err := s.staff.Create(ctx, staff); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	return staff, nil
 }
@@ -235,20 +235,23 @@ func (s *StaffService) UpdateStaffMember(ctx context.Context, actor *domain.Staf
 	}
 	staff, err := s.staff.GetByID(ctx, staffID)
 	if err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	if email != "" && email != staff.Email {
 		if existing, err := s.staff.GetByEmail(ctx, email); err == nil && existing != nil && existing.ID != staff.ID {
-			return nil, errors.New("staff email already exists")
+			return nil, apperrors.NewConflict("staff email already exists", map[string]any{"email": email})
 		} else if err != nil && err != pgx.ErrNoRows {
-			return nil, err
+			return nil, apperrors.MapError(err)
 		}
 	}
 	var departmentID *string
 	if teamID != nil && *teamID != "" {
 		team, err := s.teams.GetByID(ctx, *teamID)
 		if err != nil {
-			return nil, err
+			return nil, apperrors.MapError(err)
+		}
+		if !team.IsActive {
+			return nil, apperrors.NewConflict("team inactive", map[string]any{"team_id": *teamID})
 		}
 		departmentID = &team.DepartmentID
 	}
@@ -261,7 +264,7 @@ func (s *StaffService) UpdateStaffMember(ctx context.Context, actor *domain.Staf
 	staff.Active = active
 
 	if err := s.staff.Update(ctx, staff); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	return staff, nil
 }

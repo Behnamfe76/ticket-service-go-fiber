@@ -1,12 +1,11 @@
 package handlers
 
 import (
-	"net/http"
-
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/spec-kit/ticket-service/internal/api/dto"
 	"github.com/spec-kit/ticket-service/internal/service"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 // UsersHandler exposes auth endpoints for end-users.
@@ -23,15 +22,15 @@ func NewUsersHandler(authService *service.AuthService) *UsersHandler {
 func (h *UsersHandler) Register(c *fiber.Ctx) error {
 	var req dto.UserRegisterRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Email == "" || req.Password == "" || req.Name == "" {
-		return fiber.NewError(http.StatusBadRequest, "name, email, password required")
+		return apperrors.NewValidationError("name, email, password required", nil)
 	}
 
 	user, token, exp, err := h.auth.RegisterUser(c.Context(), req.Name, req.Email, req.Password)
 	if err != nil {
-		return fiber.NewError(http.StatusBadRequest, err.Error())
+		return err
 	}
 
 	return c.Status(http.StatusCreated).JSON(fiber.Map{
@@ -50,15 +49,15 @@ func (h *UsersHandler) Register(c *fiber.Ctx) error {
 func (h *UsersHandler) Login(c *fiber.Ctx) error {
 	var req dto.UserLoginRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(http.StatusBadRequest, "invalid payload")
+		return apperrors.NewValidationError("invalid payload", nil)
 	}
 	if req.Email == "" || req.Password == "" {
-		return fiber.NewError(http.StatusBadRequest, "email and password required")
+		return apperrors.NewValidationError("email and password required", nil)
 	}
 
 	user, token, exp, err := h.auth.LoginUser(c.Context(), req.Email, req.Password)
 	if err != nil {
-		return fiber.NewError(http.StatusUnauthorized, err.Error())
+		return err
 	}
 
 	return c.JSON(fiber.Map{

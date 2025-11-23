@@ -12,6 +12,7 @@ import (
 	"github.com/spec-kit/ticket-service/internal/config"
 	"github.com/spec-kit/ticket-service/internal/domain"
 	"github.com/spec-kit/ticket-service/internal/repository"
+	apperrors "github.com/spec-kit/ticket-service/pkg/util/errorutil"
 )
 
 // AuthSubject identifies the caller when changing password.
@@ -52,14 +53,14 @@ func NewAuthService(cfg config.Config, deps AuthDependencies) *AuthService {
 // RegisterUser creates a new end-user account.
 func (s *AuthService) RegisterUser(ctx context.Context, name, email, password string) (*domain.User, string, time.Time, error) {
 	if _, err := s.users.GetByEmail(ctx, email); err == nil {
-		return nil, "", time.Time{}, errors.New("email already registered")
+		return nil, "", time.Time{}, apperrors.NewConflict("email already registered", map[string]any{"email": email})
 	} else if err != nil && err != pgx.ErrNoRows {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.MapError(err)
 	}
 
 	hash, err := auth.HashPassword(password, s.bcryptCost)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.NewInternalError(err)
 	}
 
 	user := &domain.User{
@@ -69,12 +70,12 @@ func (s *AuthService) RegisterUser(ctx context.Context, name, email, password st
 		Status:       domain.UserStatusActive,
 	}
 	if err := s.users.Create(ctx, user); err != nil {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.MapError(err)
 	}
 
 	token, exp, err := s.tokenMgr.GenerateToken(user.ID, domain.SubjectTypeUser, nil)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.NewInternalError(err)
 	}
 	return user, token, exp, nil
 }
@@ -83,14 +84,14 @@ func (s *AuthService) RegisterUser(ctx context.Context, name, email, password st
 func (s *AuthService) LoginUser(ctx context.Context, email, password string) (*domain.User, string, time.Time, error) {
 	user, err := s.users.GetByEmail(ctx, email)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.MapError(err)
 	}
 	if err := auth.ComparePassword(user.PasswordHash, password); err != nil {
-		return nil, "", time.Time{}, errors.New("invalid credentials")
+		return nil, "", time.Time{}, apperrors.NewUnauthorized("invalid credentials")
 	}
 	token, exp, err := s.tokenMgr.GenerateToken(user.ID, domain.SubjectTypeUser, nil)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.NewInternalError(err)
 	}
 	return user, token, exp, nil
 }
@@ -99,17 +100,17 @@ func (s *AuthService) LoginUser(ctx context.Context, email, password string) (*d
 func (s *AuthService) LoginStaff(ctx context.Context, email, password string) (*domain.StaffMember, string, time.Time, error) {
 	staff, err := s.staff.GetByEmail(ctx, email)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.MapError(err)
 	}
 	if !staff.Active {
-		return nil, "", time.Time{}, errors.New("staff inactive")
+		return nil, "", time.Time{}, apperrors.NewForbidden("staff inactive")
 	}
 	if err := auth.ComparePassword(staff.PasswordHash, password); err != nil {
-		return nil, "", time.Time{}, errors.New("invalid credentials")
+		return nil, "", time.Time{}, apperrors.NewUnauthorized("invalid credentials")
 	}
 	token, exp, err := s.tokenMgr.GenerateToken(staff.ID, domain.SubjectTypeStaff, &staff.Role)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return nil, "", time.Time{}, apperrors.NewInternalError(err)
 	}
 	return staff, token, exp, nil
 }
@@ -129,12 +130,12 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) (*
 	} else if err == pgx.ErrNoRows {
 		staff, staffErr := s.staff.GetByEmail(ctx, email)
 		if staffErr != nil {
-			return nil, staffErr
+			return nil, apperrors.MapError(staffErr)
 		}
 		subjectType = domain.SubjectTypeStaff
 		subjectID = staff.ID
 	} else {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 
 	token := &repository.PasswordResetToken{
@@ -144,7 +145,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) (*
 		ExpiresAt:   time.Now().Add(s.resetTTL),
 	}
 	if err := s.resets.Create(ctx, token); err != nil {
-		return nil, err
+		return nil, apperrors.MapError(err)
 	}
 	return token, nil
 }
@@ -153,10 +154,10 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) (*
 func (s *AuthService) ConfirmPasswordReset(ctx context.Context, tokenStr, newPassword string) error {
 	token, err := s.resets.GetByToken(ctx, tokenStr)
 	if err != nil {
-		return err
+		return apperrors.MapError(err)
 	}
 	if token.UsedAt != nil || time.Now().After(token.ExpiresAt) {
-		return errors.New("token expired or used")
+		return apperrors.NewConflict("token expired or used", nil)
 	}
 
 	hash, err := auth.HashPassword(newPassword, s.bcryptCost)
@@ -168,26 +169,26 @@ func (s *AuthService) ConfirmPasswordReset(ctx context.Context, tokenStr, newPas
 	case domain.SubjectTypeUser:
 		user, err := s.users.GetByID(ctx, token.SubjectID)
 		if err != nil {
-			return err
+			return apperrors.MapError(err)
 		}
 		user.PasswordHash = hash
 		if err := s.users.Update(ctx, user); err != nil {
-			return err
+			return apperrors.MapError(err)
 		}
 	case domain.SubjectTypeStaff:
 		staff, err := s.staff.GetByID(ctx, token.SubjectID)
 		if err != nil {
-			return err
+			return apperrors.MapError(err)
 		}
 		staff.PasswordHash = hash
 		if err := s.staff.Update(ctx, staff); err != nil {
-			return err
+			return apperrors.MapError(err)
 		}
 	default:
-		return errors.New("unknown subject type")
+		return apperrors.NewInternalError(errors.New("unknown subject type"))
 	}
 
-	return s.resets.MarkUsed(ctx, token.ID)
+	return apperrors.MapError(s.resets.MarkUsed(ctx, token.ID))
 }
 
 // ChangePassword verifies current password before updating to new hash.
@@ -201,25 +202,25 @@ func (s *AuthService) ChangePassword(ctx context.Context, subject AuthSubject, c
 	case domain.SubjectTypeUser:
 		user, err := s.users.GetByID(ctx, subject.ID)
 		if err != nil {
-			return err
+			return apperrors.MapError(err)
 		}
 		if err := auth.ComparePassword(user.PasswordHash, currentPassword); err != nil {
-			return errors.New("invalid credentials")
+			return apperrors.NewUnauthorized("invalid credentials")
 		}
 		user.PasswordHash = hash
-		return s.users.Update(ctx, user)
+		return apperrors.MapError(s.users.Update(ctx, user))
 	case domain.SubjectTypeStaff:
 		staff, err := s.staff.GetByID(ctx, subject.ID)
 		if err != nil {
-			return err
+			return apperrors.MapError(err)
 		}
 		if err := auth.ComparePassword(staff.PasswordHash, currentPassword); err != nil {
-			return errors.New("invalid credentials")
+			return apperrors.NewUnauthorized("invalid credentials")
 		}
 		staff.PasswordHash = hash
-		return s.staff.Update(ctx, staff)
+		return apperrors.MapError(s.staff.Update(ctx, staff))
 	default:
-		return errors.New("unknown subject")
+		return apperrors.NewInternalError(errors.New("unknown subject"))
 	}
 }
 
